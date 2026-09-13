@@ -428,7 +428,11 @@ uv 官方要求 `.venv` 不进绑定挂载，且 Windows 挂载上装小文件�
 验证：
 
 ```powershell
-docker compose exec aero-dev bash -lc "cd /workspace && uv run python -c \"import numpy, scipy, pandas, matplotlib; print('sci stack OK:', numpy.__version__, scipy.__version__)\""
+docker compose exec aero-dev bash -lc "cd /workspace && uv run python"
+```
+```py
+import numpy, scipy, pandas, matplotlib; 
+print('sci stack OK:', numpy.__version__, scipy.__version__)
 ```
 
 ### 第 5 步：用独立 Ruff 服务跑一次静态检查
@@ -483,6 +487,106 @@ docker run --rm -it -v "${PWD}\workspace:/w" -w /w node:24-trixie-slim node -e "
 > 如果你的 VS Code 打不开容器而只想用终端：**完全没问题**。
 > `.devcontainer/devcontainer.json` 只是加了一层便利，删掉它不影响
 > `docker compose` 的任何用法。
+
+### 第 8 步：收工 —— 「退出」到底退的是什么
+
+到这里环境已经完全跑通了。但在你合上电脑之前，有件事必须先讲清楚：
+
+> **`exit` 不会关掉容器。**
+
+#### 8.1 容器有两种完全不同的"退出"
+
+实测证据（`docker compose top` 的真实输出）：
+
+```
+SERVICE   UID   PID   CMD
+aero-dev  root  9110  /sbin/docker-init -- sleep infinity    ← init: true 加的 tini
+aero-dev  root  9134  sleep infinity                         ← 容器的 PID 1
+```
+
+然后在容器里开一个 shell 再退出：
+
+```
+[我在容器里] 我的 PID=500
+[我在容器里] PID 1 = docker-init
+[我在容器里] 现在退出这个 shell...
+--- exit 之后 ---
+aero-dev | Up About an hour          ← 容器纹丝不动
+```
+
+> **关键认知**：`docker compose exec` 不是"进入容器本体"，
+> 而是在**已经跑着的容器里新开一个进程**。
+> `exit` 只结束你新开的那个进程（PID 500），PID 1（`sleep infinity`）从头到尾没动过。
+
+所以"退出"要分两个层级，别混为一谈：
+
+| 层级 | 你要做的 | 效果 |
+|---|---|---|
+| **离开 shell** | `exit` 或 `Ctrl+D` | 人走了，**机器还在跑** |
+| **停掉容器** | `docker compose stop` / `down` | 机器关了 |
+
+#### 8.2 容器"常驻"是故意的，而且几乎不花钱
+
+**为什么必须常驻**：VS Code 要能随时 attach 进来。Dev Container 规范里，用 Compose 时
+`overrideCommand` 默认是 `false` —— **容器必须自己活着**，否则工具一接入它就已经退出了。
+这就是 `docker-compose.yml` 里 `command: ["sleep", "infinity"]` 那一行的全部意义。
+
+**常驻贵不贵**（实测）：
+
+| 指标 | 值 |
+|---|---|
+| CPU | **0.00%** |
+| 内存 | **101.7 MiB** / 15.53 GiB（约 0.65%） |
+
+一个 `sleep infinity` 就是挂在那儿什么都不干。
+**所以没有"每天用完就关掉"的必要** —— 关机重启时 Docker Desktop 会自己处理。
+
+#### 8.3 完整的停止 / 清理对照表
+
+| 你想做什么 | 命令 / 操作 | 容器 | `.venv` 卷 | 镜像 |
+|---|---|---|---|---|
+| 离开容器里的 shell | `exit` / `Ctrl+D` | **继续跑** ✅ | 保留 | 保留 |
+| 暂停（恢复最快） | `docker compose stop` | 停止 | 保留 | 保留 |
+| 恢复 | `docker compose start` 或 `up -d` | 起回来 | 保留 | 保留 |
+| 删掉容器（保留数据） | `docker compose down` | **删除** | **保留** ✅ | 保留 |
+| 彻底清空（连 `.venv`） | `docker compose down -v` | 删除 | **删除** ⚠️ | 保留 |
+| 关掉整个引擎 | 退出 Docker Desktop | 全停 | 保留 | 保留 |
+| 关掉 VS Code 窗口 | 直接关 | **自动 stop** | 保留 | 保留 |
+
+`stop` 与 `down` 的区别：`stop` 只是暂停，容器还在，`start` 起来是**秒级**；
+`down` 把容器删了，下次 `up` 要**重新创建**。
+
+#### 8.4 ⚠️ 最重要的一条：`down` 之后，容器里的改动会丢
+
+| 位置 | `down` 之后 | 为什么 |
+|---|---|---|
+| `/workspace/...`（你的代码、Docs） | **完好** ✅ | 绑定挂载，文件真身在 Windows 上 |
+| `/workspace/.venv` | **完好** ✅ | 命名卷 |
+| `/usr/local/...`、`/opt/...`、`/root/...` | **丢失** ❌ | 容器可写层，随容器一起被删 |
+
+具体会踩到的例子：
+
+- 容器里 `apt install` 装的包 → `down` 后没了
+- `uv tool install` 装出来的工具（在 `/opt/uv-tools`）→ 没了
+- 容器里 `git config` 写的 `/root/.gitconfig` → 没了
+- Shell 历史（`/root/.bash_history`）→ 没了
+
+> **规律：要永久保留的东西，要么放进 `workspace/`（挂载），
+> 要么写进 `docker/dev.Dockerfile`（镜像）。这两者之外的一切都是临时的。**
+
+#### 8.5 一个你可能没意识到的自动行为
+
+`devcontainer.json` 里有一行：
+
+```json
+"shutdownAction": "stopCompose",
+```
+
+意思是：**你关掉 VS Code 窗口时，VS Code 会自动帮你停掉这些容器。**
+所以走 VS Code 路径的话，"退出"这件事已经被自动化了 —— 你可能根本没机会手动停。
+
+想让"关了窗口容器也继续跑"，把那行改成 `"shutdownAction": "none"` 即可
+（代价是它会一直占着那约 100 MB 内存，直到你手动 `down`）。
 
 ---
 
@@ -679,9 +783,11 @@ extend-exclude = [".venv", "workspace/Docs"]
 ```powershell
 # 起 / 停
 docker compose up -d aero-dev              # 起主容器
-docker compose stop                        # 停（保留容器和卷）
+docker compose stop                        # 停（保留容器和卷），start 可秒级恢复
 docker compose down                        # 删容器（保留 aero-venv 卷）
 docker compose down -v                     # 连 aero-venv 卷一起删 ← 会丢 .venv
+#   ⚠️ 这三种"退出"的区别、以及 down 会丢掉哪些改动，
+#      详见 §2「第 8 步：收工」——那里有实测证据和完整对照表。
 
 # 进容器
 docker compose exec aero-dev bash          # 推荐：在主容器里开交互 shell
