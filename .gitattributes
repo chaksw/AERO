@@ -1,0 +1,52 @@
+# =============================================================================
+# AERO —— .gitattributes：统一行尾 + 二进制标记
+#
+# 【为什么需要】
+#   本机是 Windows（宿主）+ Linux（Docker 容器）双环境：
+#     - 你在 Windows 上编辑文件
+#     - 编译 / 运行全部发生在 Linux 容器里
+#
+#   不统一行尾会产生两类真实故障：
+#     1) shell 脚本带 CRLF → 容器里报 "bad interpreter: /bin/bash^M"
+#     2) 每次 diff 显示"整个文件都改了"（其实只是行尾变了），把真正的改动淹没
+#
+#   与 .devcontainer/devcontainer.json 里的 "files.eol": "\n" 是互补关系：
+#   那个管 VS Code 写文件，这个在 git 层面强制，管的是"进出版本库"这一步。
+# =============================================================================
+
+# 默认：自动识别文本类型，检出时统一 LF
+* text=auto eol=lf
+
+# ---- 二进制：明确标记，禁止 git 做文本转换 ----
+# （这些在 .gitignore 里已被排除；此处是双保险，万一用 git add -f 强制添加也不会被搞坏）
+*.pdf    binary
+*.PDF    binary
+*.heic   binary
+*.HEIC   binary
+*.png    binary
+*.jpg    binary
+*.jpeg   binary
+*.gif    binary
+*.zip    binary
+*.7z     binary
+*.gz     binary
+
+# ---- Windows 专有文件保留 CRLF ----
+*.bat    text eol=crlf
+*.cmd    text eol=crlf
+*.ps1    text eol=crlf
+
+# ---- 明确按文本处理（便于 diff 与合并）----
+*.md     text eol=lf
+*.py     text eol=lf
+*.cpp    text eol=lf
+*.hpp    text eol=lf
+*.h      text eol=lf
+*.toml   text eol=lf
+*.yml    text eol=lf
+*.yaml   text eol=lf
+Dockerfile*     text eol=lf
+*.Dockerfile    text eol=lf
+.dockerignore   text eol=lf
+.gitignore      text eol=lf
+.gitattributes  text eol=lf

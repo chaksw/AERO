@@ -1,0 +1,45 @@
+# .dockerignore —— 控制"构建上下文"里有什么
+#
+# 依据：Docker 官方 best practices 的 "Exclude with .dockerignore"。
+#
+# 为什么这个文件在 AERO 里特别重要：
+# docker-compose.yml 里所有 service 的 context 都是仓库根目录 "."
+# 而 workspace/ 下装着几十个 GB 级 PDF（空气动力学、ARINC 规范、DO-178C……）
+# 以及 C919_Code_Optimization 的一堆 .heic 图片。
+# 这些内容一次构建都用不到，但如果不过滤，Docker 每次 build 都会把它们
+# 打包发给 daemon —— 构建慢到无法忍受，还会白白撑爆磁盘。
+
+# ---- 参考资料 / 数据 / 产物：绝不进镜像 ----
+workspace/
+
+# ---- 版本控制与编辑器 ----
+.git/
+.gitignore
+.gitattributes
+.vscode/
+.idea/
+
+# ---- Python ----
+.venv/
+**/__pycache__/
+**/*.py[cod]
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+*.egg-info/
+
+# ---- Node ----
+node_modules/
+**/node_modules/
+
+# ---- 本仓库的编排与文档自身 ----
+# 它们不参与镜像内容，改了它们不该导致镜像缓存失效
+.dockerignore
+docker-compose.yml
+DOCKER.md
+.devcontainer/
+
+# ---- 环境变量与密钥 ----
+.env
+.env.*
+*.pem

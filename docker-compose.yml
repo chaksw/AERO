@@ -1,0 +1,115 @@
+# =============================================================================
+# AERO —— Docker Compose 编排
+#
+# 【设计结论】1 个主工作台 + 1 个按需工具服务，而不是"每个工具一个容器"。
+#
+# 依据（原文见 DOCKER.md 的引用）：
+#
+#   * Docker 官方 best practices "Decouple applications"：
+#     "Each container should have only one concern ... Limiting each container
+#      to one process is a good rule of thumb, but it's NOT a hard and fast rule."
+#     —— 这条讲的是【可部署的服务】（web app / db / cache），不是交互式工具链。
+#
+#   * Dev Container 规范（containers.dev）：
+#     开发环境 = 一个 "primary container"；多容器编排（Compose）是用来管
+#     "真正的依赖服务"的，不是用来把 head、gcc、ruff 拆开的。
+#
+# 所以本文件的分工是：
+#
+#   aero-dev  主工作台。C++ 工具链 + Python + uv + Ruff 全在一起。
+#             → 定位是"C++ 为主、Python 为原型草稿纸"。
+#               两者同容器，是为了让"Python 原型 → C++ 实现 → 对齐结果"
+#               这条链路能在一个终端、一个目录里走完。
+#             → 具体见 docker/dev.Dockerfile 顶部的定位说明。
+#
+#   ruff      独立的 Ruff 工具服务，直接用 Astral 官方镜像，零 Dockerfile。
+#             → 这才是"解耦"真正划算的地方：Ruff 的版本不再和 Python 环境绑死，
+#               你在 CI 里跑的 ruff 和本地跑的可以是同一个 tag。
+#
+# 日常只需要 `docker compose up -d aero-dev`；ruff 按需 run。
+#
+# -----------------------------------------------------------------------------
+# 【曾经有一个 cpp-env，已删除 —— 记录理由，以免以后又想加回来】
+#
+#   它原本是"C++ 专用容器"，基于 gcc 官方镜像。删掉它是因为实测发现：
+#
+#   1) 功能上完全重复：aero-dev 里的 gcc/g++/cmake/gdb/ninja 与它【逐字节相同】
+#      （两边 dpkg 查到的都是 Debian 包 14.2.0-19）。
+#   2) 它制造了持续的认知负担：文件叫 cpp.Dockerfile、服务叫 cpp-env，
+#      让人以为"C++ 在副容器里、主容器没有 C++"—— 而事实正好相反。
+#   3) 它的存在要求你【自己维护两个环境的一致性】。本仓库真的因此踩过坑：
+#      两个容器的 GCC 一度漂到 15.3 vs 14.2，引发了
+#      `GLIBCXX_3.4.34 not found` 的运行期错误（详见 DOCKER.md 踩坑记录）。
+#
+#   如果你以后又想要"只有编译工具"的纯净环境 —— 它的正确形态不是第二个常驻
+#   容器，而是【生产镜像的 build 阶段】：那里才真的需要"只有编译器"，
+#   而且有明确用途（产出二进制，运行时阶段只留运行必需品）。
+# -----------------------------------------------------------------------------
+#
+# 【没有 Node service】
+#   MCP server 是 DSH 在【宿主】上用宿主 PATH 启动的子进程，容器里的 Node
+#   不会被任何 MCP 用到，因此已从镜像中移除。需要时用一行命令即可：
+#     docker run --rm -it -v "${PWD}\workspace:/w" -w /w node:24-trixie-slim npx -y <包名>
+# =============================================================================
+
+name: aero
+
+services:
+  # ---------------------------------------------------------------------------
+  # 主开发容器
+  # ---------------------------------------------------------------------------
+  aero-dev:
+    build:
+      context: .
+      dockerfile: docker/dev.Dockerfile
+    image: aero-dev:local
+    container_name: aero-dev
+    working_dir: /workspace
+
+    volumes:
+      # 源码目录：Windows 上的 workspace/ 直接绑进容器
+      - ./workspace:/workspace
+
+      # 关键细节：.venv 放进 Docker 命名卷，而不是留在绑定挂载上。
+      # uv 官方文档明确说：
+      #   "it is important not to include the project virtual environment
+      #    (.venv) in the mount, because the virtual environment is platform
+      #    specific and the one built for the image should be kept."
+      # 另外 Windows 绑定挂载（9p/virtiofs）上装几千个小文件会慢到崩溃。
+      # 代价：`docker compose down -v` 会连它一起删掉（那时重跑 uv sync 即可）。
+      - aero-venv:/workspace/.venv
+
+    # 让容器常驻。Dev Container 规范：用 Compose 时 overrideCommand 默认 false，
+    # 容器必须自己活着，否则 VS Code 一 attach 它就退出了。
+    command: ["sleep", "infinity"]
+
+    # 用 tini 当 PID 1，处理僵尸进程（等价于 devcontainer.json 的 "init": true）
+    init: true
+
+    # gdb 需要能 ptrace 子进程，否则断点无效。
+    # 这两项是你原来 compose 里就有的，保留。
+    cap_add:
+      - SYS_PTRACE
+    security_opt:
+      - seccomp=unconfined
+
+  # ---------------------------------------------------------------------------
+  # 独立的 Ruff 工具服务（官方镜像，不需要 Dockerfile）
+  #
+  # 官方文档给的用法就是一行：
+  #   docker run -v .:/io --rm ghcr.io/astral-sh/ruff check
+  # 这里把它固化进 Compose，省掉每次敲路径，并把版本钉死。
+  # ---------------------------------------------------------------------------
+  ruff:
+    image: ghcr.io/astral-sh/ruff:0.16.7
+    # profiles：让 `docker compose up` 不会启动它（它跑完 check 就退出，
+    # 每次 up 都跟着跑一遍很吵）。用 `docker compose run --rm ruff ...` 显式调用。
+    profiles: ["tools"]
+    working_dir: /io
+    volumes:
+      - ./workspace:/io
+    command: ["check", "."]
+
+volumes:
+  # 容器内 Linux 原生文件系统上的 Python 虚拟环境，见 aero-dev 的注释
+  aero-venv:

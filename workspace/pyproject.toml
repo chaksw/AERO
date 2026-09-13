@@ -1,0 +1,94 @@
+# =============================================================================
+# AERO —— Python 项目定义（uv 管理）
+#
+# 【定位】这一半是**原型草稿纸**，不是最终交付物。
+#
+#   工作流：先在 Python（numpy/scipy）上把融合算法跑通、把参数整定清楚，
+#   再在 C++ 里实现。Python 版本还有一个额外作用：
+#   **当 C++ 实现的参照物** —— 同一组输入，两边各跑一遍，diff 输出。
+#   这比"我说它对它就对"可靠得多。
+#
+# 【为什么依赖里没有 filterpy / pykalman】
+#   这类库对新版 Python 支持不稳，而且卡尔曼滤波手写一遍只要 30 行左右。
+#   更重要的：手写一遍你才真的理解 P / Q / R / K 各自在干什么 ——
+#   而这份理解正是把它翻译成 C++ 的前提。
+#
+# 这个文件的存在让三件事同时成立：
+#   1) `uv sync`            → 在容器里建出 /workspace/.venv 并装好依赖
+#   2) VS Code + Pylance    → 认得出解释器和依赖，补全/跳转可用
+#   3) `ruff`               → 读出下面 [tool.ruff] 的规则，终端和编辑器行为一致
+#
+# 依赖故意不写版本号：由 uv.lock 钉死精确版本。
+# （"在哪钉版本"这件事，Docker 官方和 uv 官方的建议是一致的：
+#   声明放宽、锁文件收紧。）
+# =============================================================================
+
+[project]
+name = "aero"
+version = "0.1.0"
+description = "大气数据融合算法 —— Python 原型与参照实现 (reference prototype for the C++ core)"
+requires-python = ">=3.13"
+dependencies = [
+    "ipykernel",
+    "matplotlib",
+    "numpy",
+    "pandas",
+    "scipy",
+]
+
+[dependency-groups]
+dev = [
+    "pytest",
+    "ruff",
+]
+
+# 本项目只作为"依赖容器"，不构建 wheel / sdist。
+# 这样 uv sync 不会去找 src/ 布局，你可以自由地用 notebooks/ 或 scripts/ 起步。
+[tool.uv]
+package = false
+
+# -----------------------------------------------------------------------------
+# Ruff 配置
+#
+# 说明：这里只放"项目级"配置。ruff 这个可执行文件本身有两条来源，
+# 二者都是本仓库刻意解耦的产物：
+#   * 容器里 `uv tool install` 装的 ruff==0.16.7（docker/dev.Dockerfile）
+#   * `docker compose run --rm ruff ...` 用的官方镜像 ruff:0.16.7
+# 版本一致，所以本地跑和 CI 跑的结果一致。
+# -----------------------------------------------------------------------------
+[tool.ruff]
+line-length = 100
+target-version = "py313"
+# 注意这里写的是 "Docs" 而不是 "workspace/Docs"。
+# 实测（ruff 0.16.7）：模式是相对于**项目根**（也就是 pyproject.toml 所在目录）匹配的，
+#   extend-exclude = ["workspace/Docs"]  -> 探针文件仍被检查到 ❌（写错了）
+#   extend-exclude = ["Docs"]            -> 探针文件被正确排除 ✅
+# 而且 "Docs" 在两种运行方式下都对：
+#   aero-dev 里项目根 = /workspace，Docs 在 /workspace/Docs
+#   ruff 服务里项目根 = /io，       Docs 在 /io/Docs
+# （Docs/ 里目前只有 PDF 和 .md，本不会有 .py；这条排除是防御性的。）
+extend-exclude = [".venv", "Docs"]
+
+[tool.ruff.lint]
+# E/W  pycodestyle     F  pyflakes        I   isort
+# UP   pyupgrade       B  bugbear         SIM flake8-simplify
+# NPY  numpy 专项      RUF ruff 自有规则
+# NPY 这组对数值计算代码很值：它会抓出 np.ndarray 的误用、
+# 比如把数组用在 `if` 里、或者该用 np.all/any 的地方用了内置函数。
+select = ["E", "W", "F", "I", "UP", "B", "SIM", "NPY", "RUF"]
+
+[tool.ruff.lint.per-file-ignores]
+# notebook 里允许"先 import 再慢慢用"、允许 cell 里重定义变量
+"*.ipynb" = ["E402", "F811"]
+
+[tool.ruff.format]
+quote-style = "double"
+indent-style = "space"
+line-ending = "lf"
+
+# -----------------------------------------------------------------------------
+# pytest
+# -----------------------------------------------------------------------------
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-q"

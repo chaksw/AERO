@@ -1,0 +1,77 @@
+# =============================================================================
+# AERO —— .gitignore
+#
+# 【设计原则】大块二进制参考资料不进 git；项目文件与你自己的笔记进 git。
+#
+# 实测 workspace/ 的体积构成（这是设计依据，不是猜的）：
+#
+#     .pdf    17 个   639.5 MB   ← 不进
+#     .heic   27 个   116.6 MB   ← 不进
+#     .md      3 个      40 KB   ← 进（你的笔记）
+#     pyproject.toml / uv.lock    ← 进
+#
+# 【为什么 PDF / HEIC 必须排除】
+#   git 对二进制文件**不做 delta 压缩**，每个版本都存一份完整副本。
+#   把 756 MB 塞进去，会让每次 clone / push 都极其痛苦，
+#   而且**即使以后删掉，这些体积仍永久留在历史里**。
+#   这类"输入型资料"应该由网盘 / 备份解决，不是版本控制该干的事。
+#
+#   如果你确有某个 PDF 需要版本化，用强制添加绕过：
+#       git add -f workspace/Docs/某个文件.pdf
+#
+# 【不要排除的】uv.lock 必须进 git —— 锁文件是"可复现"的依据。
+# =============================================================================
+
+# ---- 参考资料：体积大，且是"输入"不是"产物" ----
+*.pdf
+*.PDF
+*.heic
+*.HEIC
+*.zip
+*.7z
+
+# ---- Python ----
+.venv/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+*.egg-info/
+.ipynb_checkpoints/
+
+# ---- C++ / CMake（为将来的算法代码预留）----
+build/
+cmake-build-*/
+CMakeCache.txt
+CMakeFiles/
+compile_commands.json
+.cache/                  # clangd
+*.o
+*.a
+*.so
+*.dylib
+*.exe
+*.out
+
+# ---- Node（镜像里已无 Node；宿主侧跑 npm 时可能产生）----
+node_modules/
+
+# ---- 编辑器 / IDE ----
+# 说明：编辑器配置统一放在 .devcontainer/devcontainer.json 里，
+# 那个文件是要提交的；宿主的 .vscode/ 是本地产物，不提交。
+.vscode/
+.idea/
+*.swp
+*~
+
+# ---- 操作系统 ----
+Thumbs.db
+desktop.ini
+.DS_Store
+
+# ---- 密钥与环境变量：绝不提交 ----
+.env
+.env.*
+*.pem
+*.key
