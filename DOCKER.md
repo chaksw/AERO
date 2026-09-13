@@ -159,6 +159,11 @@ docker run -v .:/io --rm ghcr.io/astral-sh/ruff:0.3.0 check
    .dockerignore ──→ 决定上面那次 build 把哪些文件发给 Docker 引擎
    .devcontainer/devcontainer.json ──→ 只给 VS Code 看，不产生任何东西
    DOCKER.md ──→ 只给人看，运行时不参与
+
+   ── 以下三个属于【宿主侧的版本控制】，容器完全不参与 ──
+   .git/          ← 版本库本体
+   .gitignore     ← 排除 756 MB 的 PDF/HEIC 参考资料与各类构建产物
+   .gitattributes ← 统一 LF 行尾（Windows 宿主 + Linux 容器双环境，避免 CRLF 噪音）
 ```
 
 ### 1.3 逐个文件的职责
@@ -269,15 +274,50 @@ docker run -v .:/io --rm ghcr.io/astral-sh/ruff:0.3.0 check
 | Ruff 用 Astral 官方镜像做成独立服务 | 采纳 | 0.4 节 |
 | 容器里**不放 Node/npm/npx** | 移除（省 147 MB） | 踩坑记录 · 第 1 条 |
 | **删除 `cpp-env`** 这个 C++ 专用容器 | 移除（省 807 MB + 一整套一致性维护） | 0.4 节、`docker-compose.yml` 头部 |
+| **项目纳入 git 版本控制** | 采纳（`.gitignore` 挡住 756 MB 参考资料） | 1.7 节 |
+| **清理孤儿镜像 + 构建缓存** | 已执行，**实际释放 13.4 GB** | 1.7 节（含一条关于"预估 vs 实际"的教训） |
 | 生产镜像推迟到 C++ 代码写出来之后再谈（选项 C） | 挂起 | 第 6 节 |
 
-### 1.7 尚未完成的事（诚实清单）
+### 1.7 清理记录，以及尚未完成的事
+
+#### ✅ 已完成：镜像与构建缓存清理
+
+| 对象 | 清理前 | 清理后 |
+|---|---|---|
+| 镜像 | 6 个 / **6.551 GB** | **2 个 / 1.13 GB** |
+| 构建缓存 | **9.158 GB** | **1.138 GB** |
+
+**释放合计 13.4 GB。** 保留下来的两个镜像：
+
+- `aero-dev:local`（1.09 GB）—— 正在使用
+- `ghcr.io/astral-sh/ruff:0.16.7`（36 MB）—— **必须保留**：它是按需服务，
+  平时没有常驻容器，所以 `docker image prune -a` 会把它当"无用镜像"误删。
+  这就是本次全程使用**定向 `docker rmi`** 而不是 `prune -a` 的原因。
+
+> ⚠️ **我预估 8.8 GB，实际 13.4 GB。差在哪？——一个值得记住的教训**
+>
+> `docker system df` 报的 "Images RECLAIMABLE 3.982 GB" **只统计每个镜像的"独有层"**，
+> 它假设共享层会被别的镜像继续引用。但这次四个镜像**是一起删的**，
+> 它们共享的那 1.474 GB 也一并释放了。
+> 而构建缓存在镜像删除之后，又有约 3.2 GB 从"被引用"变成"无主"。
+>
+> **结论：`docker system df` 的 RECLAIMABLE 是保守下界，不是准确预测。**
+> 它只告诉你"至少能释放多少"，不告诉你"最多能释放多少"。
+
+**之后重建的一次性代价**：约 4 分钟 + 重新下载约 141 MB 的 apt 包。
+日常的 `up` / `exec` **完全不受影响**。
+
+#### ⏳ 尚未完成
 
 | 悬着的事 | 说明 |
 |---|---|
 | **算法代码：一行都还没有** | `workspace/` 里只有 `pyproject.toml`、`uv.lock`、`Docs/`。**没有 `.py`，没有 `.cpp`** |
 | **选项 C（生产镜像）** | 等你代码出来再谈。关键约束（build 阶段必须用 GCC 14.2）已查清并写在第 4 条踩坑记录里 |
-| **约 8.8 GB 可回收镜像** | `aero-cpp:local`(807 MB)、`gcc:15-trixie`(2.19 GB)、`aero-cpp-env:latest`(2.37 GB)、`node:22`(1.64 GB) + 构建缓存 4.83 GB。**尚未清理，等确认** |
+
+> 补充：**宿主上的 git 也需要 `safe.directory`。** 本仓库目录属主是
+> `BUILTIN\Administrators` 而当前用户不同，git 会报 `detected dubious ownership`。
+> 容器里已在 `dev.Dockerfile` 里预防（`git config --system --add safe.directory '*'`），
+> 但**宿主**需要单独执行 `git config --global --add safe.directory D:/Projects/AERO`。
 
 ### 1.8 ✅ 本机实测通过清单
 
